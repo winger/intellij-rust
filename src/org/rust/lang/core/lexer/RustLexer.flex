@@ -8,6 +8,21 @@ import com.intellij.psi.tree.IElementType;
   public _RustLexer() {
     this((java.io.Reader)null);
   }
+
+  /**
+    * '#+' stride demarking start/end of raw string/byte literal
+    */
+  private int zzShaStride = -1;
+
+  /**
+    * Starting position of raw string/byte literal
+    */
+  private int zzRawLiteralStart = -1;
+
+  /**
+    * Raw literal type (byte/string)
+    */
+  private IElementType zzRawLiteralType = null;
 %}
 
 %public
@@ -20,6 +35,8 @@ import com.intellij.psi.tree.IElementType;
 %x EOL_COMMENT
 
 %x LIFETIME_OR_CHAR
+
+%x RAW_LITERAL
 
 %x SUFFIX
 
@@ -65,18 +82,12 @@ HEX_DIGIT = [A-F0-9]
 OCT_DIGIT = [0-7]
 BIN_DIGIT = [0-1]
 
-//CHAR_LITERAL = \x27 ([^'] | {ESCAPE_SEQUENCE})* \x27?
-
-STRING_LITERAL = r? \x22 ([^\"] | {ESCAPE_SEQUENCE})* (\x22|\\)?
+STRING_LITERAL = \x22 ([^\"] | {ESCAPE_SEQUENCE})* (\x22|\\)?
 
 ESCAPE_SEQUENCE = \\[^\r\n\t\\] | {BYTE_ESCAPE} | {UNICODE_ESCAPE}
 BYTE_ESCAPE = \\n|\\r|\\t|\\\\|\\x{HEX_DIGIT}{2}
 UNICODE_ESCAPE = \\u\{{HEX_DIGIT}{1,6}\}
 
-// TODO(kudinkin):
-//  Raw string literals
-//  Byte literals
-//  Raw byte literals
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Other
@@ -197,13 +208,30 @@ SHEBANG_LINE=\#\![^\[].*
 
   {IDENTIFIER}                    { return RustTokenElementTypes.IDENTIFIER; }
 
+  /* LITERALS */
+
   {INT_LITERAL}                   { return RustTokenElementTypes.INTEGER_LITERAL; }
 
   {FLT_NORMAL}                    { return RustTokenElementTypes.FLOAT_LITERAL; }
   {FLT_TRAILING_DOT}/[^._\p{xidstart}]
                                   { return RustTokenElementTypes.FLOAT_LITERAL; }
 
-  {STRING_LITERAL}                { return RustTokenElementTypes.STRING_LITERAL; }
+  "b"{STRING_LITERAL}             { yybegin(SUFFIX); return RustTokenElementTypes.BYTE_LITERAL; }
+  "br"{STRING_LITERAL}            { yybegin(SUFFIX); return RustTokenElementTypes.RAW_BYTE_LITERAL; }
+
+  "br" #+                         { yybegin(RAW_LITERAL);
+                                    zzRawLiteralStart = zzStartRead;
+                                    zzRawLiteralType  = RustTokenElementTypes.RAW_BYTE_LITERAL;
+                                    zzShaStride       = yylength() - 2; }
+
+  {STRING_LITERAL}                { yybegin(SUFFIX); return RustTokenElementTypes.STRING_LITERAL; }
+  "r"{STRING_LITERAL}             { yybegin(SUFFIX); return RustTokenElementTypes.RAW_STRING_LITERAL; }
+
+  "r" #+                          { yybegin(RAW_LITERAL);
+
+                                    zzRawLiteralStart = zzStartRead;
+                                    zzRawLiteralType  = RustTokenElementTypes.RAW_STRING_LITERAL;
+                                    zzShaStride       = yylength() - 1; }
 
   {SHEBANG_LINE}                  { return RustTokenElementTypes.SHEBANG_LINE; }
 
@@ -218,6 +246,30 @@ SHEBANG_LINE=\#\![^\[].*
 <SUFFIX>{IDENTIFIER}    { yybegin(YYINITIAL); }
 <SUFFIX>[^]             { yypushback(1); yybegin(YYINITIAL); }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Literals
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+<RAW_LITERAL> {
+
+  #+  {
+    if (zzShaStride == yylength()) {
+      yybegin(SUFFIX);
+
+      zzStartRead = zzRawLiteralStart;
+
+      zzShaStride       = -1;
+      zzRawLiteralStart = -1;
+
+      return zzRawLiteralType;
+    }
+  }
+
+  [^]       { }
+  <<EOF>>   { zzShaStride       = -1;
+              zzRawLiteralStart = -1; }
+
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Comments
@@ -252,7 +304,7 @@ SHEBANG_LINE=\#\![^\[].*
 // Lifetimes & Literals
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-<LIFETIME_OR_CHAR>                {
+<LIFETIME_OR_CHAR> {
 
   \x27static                          { yybegin(YYINITIAL); return RustTokenElementTypes.STATIC_LIFETIME; }
   \x27{IDENTIFIER}                    { yybegin(YYINITIAL); return RustTokenElementTypes.LIFETIME; }
@@ -270,4 +322,4 @@ SHEBANG_LINE=\#\![^\[].*
 // Catch All
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-[^]                             { return com.intellij.psi.TokenType.BAD_CHARACTER; }
+[^] { return com.intellij.psi.TokenType.BAD_CHARACTER; }
