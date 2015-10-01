@@ -1334,8 +1334,10 @@ public class _RustLexer implements FlexLexer {
           }
         case 194: break;
         case 69: 
-          { if (zzShaStride == yylength() - 1) {
+          { int shaExcess = yylength() - 1 - zzShaStride;
+    if (shaExcess >= 0) {
       yybegin(SUFFIX);
+      yypushback(shaExcess);
 
       zzStartRead = zzRawLiteralStart;
 
